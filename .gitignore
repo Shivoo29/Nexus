@@ -1,0 +1,50 @@
+# Rust build artifacts
+editor/target/
+**/target/
+**/*.rs.bk
+**/*.pdb
+
+# Node modules
+web/node_modules/
+backend/node_modules/
+node_modules/
+
+# Build outputs
+web/.next/
+web/out/
+backend/dist/
+backend/build/
+
+# Environment files
+.env
+.env.local
+.env.production.local
+.env.development.local
+
+# IDE files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Testing
+coverage/
+.nyc_output/
+
+# Database
+*.sqlite
+*.db
+prisma/dev.db
+prisma/dev.db-journal
+
+# OS files
+Thumbs.db
+.DS_Store
