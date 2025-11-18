@@ -7,6 +7,7 @@ use winit::{
 
 mod buffer;
 mod config;
+mod cursor;
 mod renderer;
 mod text_renderer;
 mod ui;
@@ -14,6 +15,7 @@ mod ui;
 use renderer::Renderer;
 use buffer::Buffer;
 use config::Config;
+use cursor::Cursor;
 
 fn main() -> Result<()> {
     // Initialize logger
@@ -45,6 +47,10 @@ fn main() -> Result<()> {
     buffer.insert_text(0, "// Welcome to Nexus!\n// The AI-native code editor that doesn't suck.\n\nfn main() {\n    println!(\"Hello, World!\");\n}\n");
     log::info!("📝 Text buffer initialized");
 
+    // Create cursor
+    let mut cursor = Cursor::new();
+    log::info!("🖱️  Cursor initialized");
+
     // Event loop
     log::info!("🔄 Entering event loop");
 
@@ -59,7 +65,10 @@ fn main() -> Result<()> {
                     renderer.resize(physical_size);
                 }
                 WindowEvent::RedrawRequested => {
-                    match renderer.render(&buffer) {
+                    // Update cursor blink (assume 16ms frame time)
+                    cursor.update_blink(0.016);
+
+                    match renderer.render(&buffer, &cursor) {
                         Ok(_) => {}
                         Err(e) => {
                             log::error!("Render error: {:?}", e);
