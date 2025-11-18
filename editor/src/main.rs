@@ -1,13 +1,14 @@
 use anyhow::Result;
 use winit::{
     event::{Event, WindowEvent},
-    event_loop::{ControlFlow, EventLoop},
+    event_loop::EventLoop,
     window::WindowBuilder,
 };
 
 mod buffer;
 mod config;
 mod renderer;
+mod text_renderer;
 mod ui;
 
 use renderer::Renderer;
@@ -21,7 +22,7 @@ fn main() -> Result<()> {
     log::info!("🚀 Starting Nexus Editor v{}", env!("CARGO_PKG_VERSION"));
 
     // Load configuration
-    let config = Config::load()?;
+    let _config = Config::load()?;
     log::info!("⚙️  Configuration loaded");
 
     // Create event loop

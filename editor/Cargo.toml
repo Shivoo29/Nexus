@@ -13,7 +13,7 @@ winit = "0.29"
 raw-window-handle = "0.5"
 
 # GPU rendering
-wgpu = "0.18"
+wgpu = "0.19"
 pollster = "0.3"
 
 # Text buffer
@@ -58,9 +58,11 @@ env_logger = "0.11"
 crossbeam = "0.8"
 once_cell = "1"
 parking_lot = "0.12"
+bytemuck = { version = "1.14", features = ["derive"] }
+dirs = "5"
 
 # Discord integration (optional)
-serenity = { version = "0.12", optional = true, default-features = false, features = ["client", "gateway", "rustls_backend"] }
+serenity = { version = "0.12", optional = true, default-features = false, features = ["builder", "client", "gateway", "rustls_backend"] }
 
 [dev-dependencies]
 criterion = "0.5"

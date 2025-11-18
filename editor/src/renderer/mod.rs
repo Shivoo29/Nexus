@@ -1,17 +1,26 @@
 use anyhow::Result;
 use wgpu::{
-    Device, Queue, Surface, SurfaceConfiguration, TextureFormat,
+    Device, Queue, Surface, SurfaceConfiguration, RenderPipeline,
+    BindGroup, Buffer as WgpuBuffer, util::DeviceExt,
 };
 use winit::window::Window;
 
 use crate::buffer::Buffer;
+use crate::text_renderer::{TextRenderer, GlyphInstance};
 
 pub struct Renderer {
+    _instance: wgpu::Instance,
     surface: Surface<'static>,
     device: Device,
     queue: Queue,
     config: SurfaceConfiguration,
     size: winit::dpi::PhysicalSize<u32>,
+    text_renderer: TextRenderer,
+    text_pipeline: RenderPipeline,
+    text_bind_group: BindGroup,
+    vertex_buffer: WgpuBuffer,
+    instance_buffer: WgpuBuffer,
+    uniform_buffer: WgpuBuffer,
 }
 
 impl Renderer {
@@ -24,8 +33,13 @@ impl Renderer {
             ..Default::default()
         });
 
-        // Create surface
-        let surface = instance.create_surface(window)?;
+        // Create surface - SAFETY: The window must outlive the surface
+        // In our case, the window is moved into the event loop closure
+        // and lives for the entire duration of the program, so this is safe
+        let surface = unsafe {
+            let target = wgpu::SurfaceTargetUnsafe::from_window(window)?;
+            instance.create_surface_unsafe(target)?
+        };
 
         // Request adapter
         let adapter = instance
@@ -73,12 +87,171 @@ impl Renderer {
         };
         surface.configure(&device, &config);
 
+        // Initialize text renderer
+        let text_renderer = TextRenderer::new(&device, &queue, surface_format)?;
+        log::info!("✍️  Text renderer initialized");
+
+        // Create shader module
+        let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("Text Shader"),
+            source: wgpu::ShaderSource::Wgsl(include_str!("../../shaders/text.wgsl").into()),
+        });
+
+        // Create bind group layout
+        let bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("Text Bind Group Layout"),
+            entries: &[
+                // Uniforms
+                wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::VERTEX,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                // Atlas texture
+                wgpu::BindGroupLayoutEntry {
+                    binding: 1,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        multisampled: false,
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                    },
+                    count: None,
+                },
+                // Sampler
+                wgpu::BindGroupLayoutEntry {
+                    binding: 2,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                    count: None,
+                },
+            ],
+        });
+
+        // Create uniform buffer
+        let uniform_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("Uniform Buffer"),
+            size: 64, // 4x4 matrix
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+
+        // Create orthographic projection matrix
+        let proj_matrix = create_ortho_matrix(size.width as f32, size.height as f32);
+        queue.write_buffer(&uniform_buffer, 0, bytemuck::cast_slice(&proj_matrix));
+
+        // Create bind group
+        let text_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("Text Bind Group"),
+            layout: &bind_group_layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: uniform_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::TextureView(text_renderer.atlas_view()),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: wgpu::BindingResource::Sampler(text_renderer.atlas_sampler()),
+                },
+            ],
+        });
+
+        // Create render pipeline
+        let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("Text Pipeline Layout"),
+            bind_group_layouts: &[&bind_group_layout],
+            push_constant_ranges: &[],
+        });
+
+        let text_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("Text Pipeline"),
+            layout: Some(&pipeline_layout),
+            vertex: wgpu::VertexState {
+                module: &shader,
+                entry_point: "vs_main",
+                buffers: &[
+                    // Vertex buffer (quad vertices)
+                    wgpu::VertexBufferLayout {
+                        array_stride: 8,
+                        step_mode: wgpu::VertexStepMode::Vertex,
+                        attributes: &wgpu::vertex_attr_array![0 => Float32x2],
+                    },
+                    // Instance buffer (glyph data)
+                    GlyphInstance::desc(),
+                ],
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &shader,
+                entry_point: "fs_main",
+                targets: &[Some(wgpu::ColorTargetState {
+                    format: surface_format,
+                    blend: Some(wgpu::BlendState::ALPHA_BLENDING),
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+            }),
+            primitive: wgpu::PrimitiveState {
+                topology: wgpu::PrimitiveTopology::TriangleList,
+                strip_index_format: None,
+                front_face: wgpu::FrontFace::Ccw,
+                cull_mode: None,
+                polygon_mode: wgpu::PolygonMode::Fill,
+                unclipped_depth: false,
+                conservative: false,
+            },
+            depth_stencil: None,
+            multisample: wgpu::MultisampleState {
+                count: 1,
+                mask: !0,
+                alpha_to_coverage_enabled: false,
+            },
+            multiview: None,
+        });
+
+        // Create vertex buffer (quad)
+        let vertices: &[f32] = &[
+            0.0, 0.0,
+            1.0, 0.0,
+            0.0, 1.0,
+            1.0, 0.0,
+            1.0, 1.0,
+            0.0, 1.0,
+        ];
+        let vertex_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("Vertex Buffer"),
+            contents: bytemuck::cast_slice(vertices),
+            usage: wgpu::BufferUsages::VERTEX,
+        });
+
+        // Create instance buffer (will be updated each frame)
+        let instance_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("Instance Buffer"),
+            size: 1024 * 1024, // 1MB for instances
+            usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+
         Ok(Self {
+            _instance: instance,
             surface,
             device,
             queue,
             config,
             size,
+            text_renderer,
+            text_pipeline,
+            text_bind_group,
+            vertex_buffer,
+            instance_buffer,
+            uniform_buffer,
         })
     }
 
@@ -88,6 +261,11 @@ impl Renderer {
             self.config.width = new_size.width;
             self.config.height = new_size.height;
             self.surface.configure(&self.device, &self.config);
+
+            // Update projection matrix
+            let proj_matrix = create_ortho_matrix(new_size.width as f32, new_size.height as f32);
+            self.queue.write_buffer(&self.uniform_buffer, 0, bytemuck::cast_slice(&proj_matrix));
+
             log::debug!("Resized to {}x{}", new_size.width, new_size.height);
         }
     }
@@ -99,6 +277,25 @@ impl Renderer {
             .texture
             .create_view(&wgpu::TextureViewDescriptor::default());
 
+        // Render text to get glyph instances
+        let text = buffer.text();
+        let instances = self.text_renderer.render_text(
+            &self.device,
+            &self.queue,
+            &text,
+            14.0, // font size
+            18.0, // line height
+        )?;
+
+        // Update instance buffer
+        if !instances.is_empty() {
+            self.queue.write_buffer(
+                &self.instance_buffer,
+                0,
+                bytemuck::cast_slice(&instances),
+            );
+        }
+
         // Create command encoder
         let mut encoder = self
             .device
@@ -108,16 +305,16 @@ impl Renderer {
 
         // Render pass
         {
-            let _render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("Render Pass"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                     view: &view,
                     resolve_target: None,
                     ops: wgpu::Operations {
                         load: wgpu::LoadOp::Clear(wgpu::Color {
-                            r: 0.1,
-                            g: 0.1,
-                            b: 0.1,
+                            r: 0.12,
+                            g: 0.12,
+                            b: 0.12,
                             a: 1.0,
                         }),
                         store: wgpu::StoreOp::Store,
@@ -128,8 +325,14 @@ impl Renderer {
                 occlusion_query_set: None,
             });
 
-            // TODO: Render text buffer
-            // This is where we'll draw glyphs, cursors, selections, etc.
+            // Render text
+            if !instances.is_empty() {
+                render_pass.set_pipeline(&self.text_pipeline);
+                render_pass.set_bind_group(0, &self.text_bind_group, &[]);
+                render_pass.set_vertex_buffer(0, self.vertex_buffer.slice(..));
+                render_pass.set_vertex_buffer(1, self.instance_buffer.slice(..));
+                render_pass.draw(0..6, 0..instances.len() as u32);
+            }
         }
 
         // Submit commands
@@ -138,4 +341,14 @@ impl Renderer {
 
         Ok(())
     }
+}
+
+// Helper function to create orthographic projection matrix
+fn create_ortho_matrix(width: f32, height: f32) -> [[f32; 4]; 4] {
+    [
+        [2.0 / width, 0.0, 0.0, 0.0],
+        [0.0, -2.0 / height, 0.0, 0.0],
+        [0.0, 0.0, 1.0, 0.0],
+        [-1.0, 1.0, 0.0, 1.0],
+    ]
 }

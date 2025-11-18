@@ -117,10 +117,9 @@ impl Buffer {
         self.redo_stack.clear();
 
         // Delete range
+        log::debug!("Deleted range {:?}", range);
         self.rope.remove(range);
         self.version += 1;
-
-        log::debug!("Deleted range {:?}", range);
     }
 
     /// Undo last change
