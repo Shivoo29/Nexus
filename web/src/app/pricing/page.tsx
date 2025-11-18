@@ -192,7 +192,7 @@ export default function PricingPage() {
                             <X className="w-4 h-4 text-gray-400" />
                           )}
                         </div>
-                        <span className={feature.highlight ? 'font-bold' : ''}>
+                        <span className={'highlight' in feature && feature.highlight ? 'font-bold' : ''}>
                           {feature.text}
                         </span>
                       </li>

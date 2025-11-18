@@ -1,0 +1,130 @@
+// Prisma Schema for Nexus Backend
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id            String   @id @default(cuid())
+  email         String   @unique
+  name          String
+  password      String?  // Null for OAuth users
+  avatar        String?
+
+  // OAuth
+  githubId      String?  @unique
+  discordId     String?  @unique
+
+  // Account status
+  emailVerified Boolean  @default(false)
+  isActive      Boolean  @default(true)
+
+  // Onboarding
+  role          String?
+  languages     String[]
+  theme         String?
+  aiProvider    String?
+  hasCompletedOnboarding Boolean @default(false)
+
+  // Timestamps
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+  lastLoginAt   DateTime?
+
+  // Relations
+  sessions      Session[]
+  apiKeys       ApiKey[]
+
+  @@index([email])
+  @@index([githubId])
+  @@index([discordId])
+}
+
+model Session {
+  id        String   @id @default(cuid())
+  userId    String
+  token     String   @unique
+  expiresAt DateTime
+
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now())
+
+  @@index([userId])
+  @@index([token])
+}
+
+model ApiKey {
+  id        String   @id @default(cuid())
+  userId    String
+  key       String   @unique
+  name      String
+  lastUsed  DateTime?
+  expiresAt DateTime?
+  isActive  Boolean  @default(true)
+
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now())
+
+  @@index([userId])
+  @@index([key])
+}
+
+model ContactMessage {
+  id        String   @id @default(cuid())
+  name      String
+  email     String
+  type      String   // general, support, sales, partnership, feedback
+  message   String   @db.Text
+  status    String   @default("pending") // pending, read, responded
+
+  createdAt DateTime @default(now())
+
+  @@index([status])
+  @@index([createdAt])
+}
+
+model Newsletter {
+  id        String   @id @default(cuid())
+  email     String   @unique
+  isActive  Boolean  @default(true)
+
+  createdAt DateTime @default(now())
+
+  @@index([email])
+}
+
+model WaitlistEntry {
+  id        String   @id @default(cuid())
+  email     String   @unique
+  name      String?
+  reason    String?  @db.Text
+  status    String   @default("pending") // pending, invited, joined
+
+  createdAt DateTime @default(now())
+
+  @@index([status])
+  @@index([createdAt])
+}
+
+model AuditLog {
+  id        String   @id @default(cuid())
+  userId    String?
+  action    String   // login, signup, profile_update, etc.
+  resource  String?
+  details   String?  @db.Text
+  ipAddress String?
+  userAgent String?
+
+  createdAt DateTime @default(now())
+
+  @@index([userId])
+  @@index([action])
+  @@index([createdAt])
+}
