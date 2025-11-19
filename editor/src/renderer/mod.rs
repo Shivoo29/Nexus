@@ -8,6 +8,10 @@ use winit::window::Window;
 use crate::buffer::Buffer;
 use crate::text_renderer::{TextRenderer, GlyphInstance};
 use crate::cursor::Cursor;
+use crate::syntax::Token;
+use crate::file_tree::FileTree;
+use crate::tabs::TabManager;
+use crate::search::SearchState;
 
 #[repr(C)]
 #[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
@@ -62,6 +66,7 @@ pub struct Renderer {
     text_instance_buffer: WgpuBuffer,
     rect_instance_buffer: WgpuBuffer,
     uniform_buffer: WgpuBuffer,
+    pub scroll_offset: f32, // Vertical scroll offset in pixels
 }
 
 impl Renderer {
@@ -390,6 +395,7 @@ impl Renderer {
             text_instance_buffer,
             rect_instance_buffer,
             uniform_buffer,
+            scroll_offset: 0.0,
         })
     }
 
@@ -408,39 +414,239 @@ impl Renderer {
         }
     }
 
-    pub fn render(&mut self, buffer: &Buffer, cursor: &Cursor) -> Result<()> {
+    pub fn render(
+        &mut self,
+        buffer: &Buffer,
+        cursor: &Cursor,
+        syntax_tokens: &[Token],
+        filename: Option<&str>,
+        is_modified: bool,
+        file_tree: &FileTree,
+        tab_manager: &TabManager,
+        search_state: &SearchState,
+    ) -> Result<()> {
         // Get current frame
         let output = self.surface.get_current_texture()?;
         let view = output
             .texture
             .create_view(&wgpu::TextureViewDescriptor::default());
 
-        // Render text to get glyph instances
-        let text = buffer.text();
-        let instances = self.text_renderer.render_text(
+        // Create color lookup function from syntax tokens
+        let color_fn = |offset: usize| {
+            for token in syntax_tokens {
+                if offset >= token.start && offset < token.end {
+                    return token.token_type.color();
+                }
+            }
+            [1.0, 1.0, 1.0, 1.0] // Default white
+        };
+
+        // Calculate layout offsets
+        let tab_bar_height = 30.0;
+        let file_tree_width = if file_tree.is_visible { 250.0 } else { 0.0 };
+        let text_offset_x = file_tree_width + 4.0; // Add padding
+        let text_offset_y = tab_bar_height + 4.0;
+
+        // Prepare text with line numbers
+        let line_count = buffer.line_count();
+        let gutter_width = (line_count.to_string().len() + 2) as usize;
+        let mut text_with_lines = String::new();
+        for (idx, line) in buffer.text().lines().enumerate() {
+            text_with_lines.push_str(&format!("{:width$} {}\n", idx + 1, line, width = gutter_width - 1));
+        }
+
+        // Render text to get glyph instances with offset
+        let mut instances = self.text_renderer.render_text(
             &self.device,
             &self.queue,
-            &text,
+            &text_with_lines,
             14.0, // font size
             18.0, // line height
+            Some(&color_fn),
         )?;
 
+        // Apply offset to all text instances (including scroll)
+        for instance in instances.iter_mut() {
+            instance.position[0] += text_offset_x;
+            instance.position[1] += text_offset_y - self.scroll_offset;
+        }
+
+        // Create status bar text
+        let file_display = if let Some(name) = filename {
+            if is_modified {
+                format!("{}*", name)
+            } else {
+                name.to_string()
+            }
+        } else {
+            if is_modified {
+                "Untitled*".to_string()
+            } else {
+                "Untitled".to_string()
+            }
+        };
+
+        let status_text = format!(
+            " {} | Line {}, Col {} | {} lines",
+            file_display,
+            cursor.position.line + 1,
+            cursor.position.column + 1,
+            line_count
+        );
+
+        // Render status bar text
+        let status_bar_y = (self.size.height as f32) - 24.0 + 4.0; // Add small padding
+        let status_instances = self.text_renderer.render_text_at_position(
+            &self.device,
+            &self.queue,
+            &status_text,
+            12.0, // Smaller font for status bar
+            4.0, // x position (left padding)
+            status_bar_y,
+            [0.7, 0.7, 0.7, 1.0], // Light gray text
+        )?;
+
+        // Render tab bar
+        let tab_bar_height = 30.0;
+        let mut tab_bar_instances = Vec::new();
+        let mut tab_x = 0.0;
+        for (idx, tab) in tab_manager.tabs().iter().enumerate() {
+            let is_active = idx == tab_manager.active_index();
+            let tab_title = tab.display_title();
+            let tab_width = (tab_title.len() as f32 * 8.0) + 20.0; // Approx width + padding
+
+            let color = if is_active {
+                [0.9, 0.9, 0.9, 1.0] // White for active
+            } else {
+                [0.6, 0.6, 0.6, 1.0] // Gray for inactive
+            };
+
+            let tab_text_instances = self.text_renderer.render_text_at_position(
+                &self.device,
+                &self.queue,
+                &tab_title,
+                12.0,
+                tab_x + 10.0,
+                8.0,
+                color,
+            )?;
+            tab_bar_instances.extend(tab_text_instances);
+
+            tab_x += tab_width;
+        }
+
+        // Render file tree (if visible)
+        let mut file_tree_instances = Vec::new();
+        let file_tree_width = 250.0;
+        if file_tree.is_visible {
+            let mut tree_text = String::from("📁 Files\n\n");
+            for (idx, node) in file_tree.nodes.iter().enumerate() {
+                let indent = "  ".repeat(node.depth);
+                let marker = if idx == file_tree.selected_index { "▶ " } else { "  " };
+                let icon = if node.is_dir {
+                    if node.is_expanded { "📂" } else { "📁" }
+                } else {
+                    "📄"
+                };
+                tree_text.push_str(&format!("{}{}{} {}\n", marker, indent, icon, node.name));
+            }
+
+            file_tree_instances = self.text_renderer.render_text_at_position(
+                &self.device,
+                &self.queue,
+                &tree_text,
+                11.0,
+                4.0,
+                tab_bar_height + 8.0,
+                [0.9, 0.9, 0.9, 1.0],
+            )?;
+        }
+
+        // Render search UI (if active)
+        let mut search_ui_instances = Vec::new();
+        if search_state.is_active {
+            let search_text = if search_state.is_replace_mode {
+                format!("Find & Replace: {} ({} matches)", search_state.query, search_state.match_count())
+            } else {
+                format!("Find: {} ({} matches) - Press ESC to close", search_state.query, search_state.match_count())
+            };
+
+            let search_y = tab_bar_height + 4.0;
+            let search_x = if file_tree.is_visible { file_tree_width + 10.0 } else { 10.0 };
+
+            search_ui_instances = self.text_renderer.render_text_at_position(
+                &self.device,
+                &self.queue,
+                &search_text,
+                12.0,
+                search_x,
+                search_y,
+                [1.0, 0.9, 0.3, 1.0], // Yellow highlight
+            )?;
+        }
+
+        // Combine text instances (main text + status bar + tab bar + file tree + search)
+        let mut all_instances = instances;
+        all_instances.extend(status_instances);
+        all_instances.extend(tab_bar_instances);
+        all_instances.extend(file_tree_instances);
+        all_instances.extend(search_ui_instances);
+
         // Update text instance buffer
-        if !instances.is_empty() {
+        if !all_instances.is_empty() {
             self.queue.write_buffer(
                 &self.text_instance_buffer,
                 0,
-                bytemuck::cast_slice(&instances),
+                bytemuck::cast_slice(&all_instances),
             );
         }
 
         // Create cursor/selection instances
         let mut rect_instances = Vec::new();
 
+        // Add tab bar background
+        rect_instances.push(RectInstance {
+            position: [0.0, 0.0],
+            size: [self.size.width as f32, tab_bar_height],
+            color: [0.15, 0.15, 0.15, 1.0], // Dark gray
+        });
+
+        // Add file tree panel background (if visible)
+        if file_tree.is_visible {
+            rect_instances.push(RectInstance {
+                position: [0.0, tab_bar_height],
+                size: [file_tree_width, self.size.height as f32 - tab_bar_height],
+                color: [0.10, 0.10, 0.10, 1.0], // Darker gray
+            });
+
+            // Add vertical separator line
+            rect_instances.push(RectInstance {
+                position: [file_tree_width, tab_bar_height],
+                size: [1.0, self.size.height as f32 - tab_bar_height],
+                color: [0.3, 0.3, 0.3, 1.0], // Light gray separator
+            });
+        }
+
+        // Add search box background (if active)
+        if search_state.is_active {
+            let search_x = if file_tree.is_visible { file_tree_width + 10.0 } else { 10.0 };
+            let search_width = 400.0;
+            let search_box_y = tab_bar_height;
+            let search_box_height = 30.0;
+
+            rect_instances.push(RectInstance {
+                position: [search_x, search_box_y],
+                size: [search_width, search_box_height],
+                color: [0.2, 0.2, 0.2, 0.95], // Semi-transparent dark background
+            });
+        }
+
         // Add cursor rectangle if should draw
         if cursor.should_draw() {
-            let cursor_x = cursor.position.column as f32 * 8.0; // Approximate char width
-            let cursor_y = cursor.position.line as f32 * 18.0; // Line height
+            // Account for line numbers gutter and scroll
+            let gutter_width_px = gutter_width as f32 * 8.0;
+            let cursor_x = text_offset_x + gutter_width_px + (cursor.position.column as f32 * 8.0);
+            let cursor_y = text_offset_y + (cursor.position.line as f32 * 18.0) - self.scroll_offset;
             rect_instances.push(RectInstance {
                 position: [cursor_x, cursor_y],
                 size: [2.0, 18.0], // 2px wide cursor
@@ -450,12 +656,12 @@ impl Renderer {
 
         // Add selection rectangles if any
         if let Some(ref selection) = cursor.selection {
-            // For simplicity, just highlight the selection range
-            // TODO: Proper multi-line selection rendering
-            let start_x = selection.start.column as f32 * 8.0;
-            let start_y = selection.start.line as f32 * 18.0;
-            let end_x = selection.end.column as f32 * 8.0;
-            let end_y = selection.end.line as f32 * 18.0;
+            // Account for line numbers gutter and scroll
+            let gutter_width_px = gutter_width as f32 * 8.0;
+            let start_x = text_offset_x + gutter_width_px + (selection.start.column as f32 * 8.0);
+            let start_y = text_offset_y + (selection.start.line as f32 * 18.0) - self.scroll_offset;
+            let end_x = text_offset_x + gutter_width_px + (selection.end.column as f32 * 8.0);
+            let _end_y = text_offset_y + (selection.end.line as f32 * 18.0) - self.scroll_offset;
 
             if selection.start.line == selection.end.line {
                 // Single line selection
@@ -465,31 +671,45 @@ impl Renderer {
                     color: [0.3, 0.5, 0.8, 0.3], // Semi-transparent blue
                 });
             } else {
-                // Multi-line selection (simplified)
+                // Multi-line selection (improved)
                 for line in selection.start.line..=selection.end.line {
-                    let y = line as f32 * 18.0;
+                    let y = text_offset_y + (line as f32 * 18.0) - self.scroll_offset;
+                    let line_start_x = text_offset_x + gutter_width_px;
+                    let max_line_width = self.size.width as f32 - line_start_x;
+
                     if line == selection.start.line {
                         rect_instances.push(RectInstance {
                             position: [start_x, y],
-                            size: [1280.0 - start_x, 18.0],
+                            size: [max_line_width - (start_x - line_start_x), 18.0],
                             color: [0.3, 0.5, 0.8, 0.3],
                         });
                     } else if line == selection.end.line {
                         rect_instances.push(RectInstance {
-                            position: [0.0, y],
-                            size: [end_x, 18.0],
+                            position: [line_start_x, y],
+                            size: [end_x - line_start_x, 18.0],
                             color: [0.3, 0.5, 0.8, 0.3],
                         });
                     } else {
                         rect_instances.push(RectInstance {
-                            position: [0.0, y],
-                            size: [1280.0, 18.0],
+                            position: [line_start_x, y],
+                            size: [max_line_width, 18.0],
                             color: [0.3, 0.5, 0.8, 0.3],
                         });
                     }
                 }
             }
         }
+
+        // Add status bar background
+        let status_bar_height = 24.0;
+        let window_height = self.size.height as f32;
+        let status_bar_y = window_height - status_bar_height;
+
+        rect_instances.push(RectInstance {
+            position: [0.0, status_bar_y],
+            size: [self.size.width as f32, status_bar_height],
+            color: [0.08, 0.08, 0.08, 1.0], // Darker background for status bar
+        });
 
         // Update rect instance buffer
         if !rect_instances.is_empty() {
@@ -539,12 +759,12 @@ impl Renderer {
             }
 
             // Render text on top
-            if !instances.is_empty() {
+            if !all_instances.is_empty() {
                 render_pass.set_pipeline(&self.text_pipeline);
                 render_pass.set_bind_group(0, &self.text_bind_group, &[]);
                 render_pass.set_vertex_buffer(0, self.vertex_buffer.slice(..));
                 render_pass.set_vertex_buffer(1, self.text_instance_buffer.slice(..));
-                render_pass.draw(0..6, 0..instances.len() as u32);
+                render_pass.draw(0..6, 0..all_instances.len() as u32);
             }
         }
 

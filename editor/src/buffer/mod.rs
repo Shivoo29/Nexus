@@ -2,6 +2,7 @@ use ropey::Rope;
 use std::ops::Range;
 
 /// Text buffer using rope data structure for efficient editing
+#[derive(Debug)]
 pub struct Buffer {
     rope: Rope,
     version: usize,
@@ -74,6 +75,16 @@ impl Buffer {
             self.rope.len_chars()
         };
         self.rope.slice(start..end).to_string()
+    }
+
+    /// Get line length in characters (excluding newline)
+    pub fn line_len(&self, line_idx: usize) -> usize {
+        if line_idx >= self.line_count() {
+            return 0;
+        }
+        let line_text = self.line(line_idx);
+        // Remove trailing newline if present
+        line_text.trim_end_matches('\n').chars().count()
     }
 
     /// Insert text at position
