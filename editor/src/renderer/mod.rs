@@ -8,6 +8,7 @@ use winit::window::Window;
 use crate::buffer::Buffer;
 use crate::text_renderer::{TextRenderer, GlyphInstance};
 use crate::cursor::Cursor;
+use crate::syntax::Token;
 
 #[repr(C)]
 #[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
@@ -408,12 +409,22 @@ impl Renderer {
         }
     }
 
-    pub fn render(&mut self, buffer: &Buffer, cursor: &Cursor) -> Result<()> {
+    pub fn render(&mut self, buffer: &Buffer, cursor: &Cursor, syntax_tokens: &[Token]) -> Result<()> {
         // Get current frame
         let output = self.surface.get_current_texture()?;
         let view = output
             .texture
             .create_view(&wgpu::TextureViewDescriptor::default());
+
+        // Create color lookup function from syntax tokens
+        let color_fn = |offset: usize| {
+            for token in syntax_tokens {
+                if offset >= token.start && offset < token.end {
+                    return token.token_type.color();
+                }
+            }
+            [1.0, 1.0, 1.0, 1.0] // Default white
+        };
 
         // Render text to get glyph instances
         let text = buffer.text();
@@ -423,6 +434,7 @@ impl Renderer {
             &text,
             14.0, // font size
             18.0, // line height
+            Some(&color_fn),
         )?;
 
         // Update text instance buffer

@@ -32,6 +32,7 @@ impl TextRenderer {
         text: &str,
         font_size: f32,
         line_height: f32,
+        color_fn: Option<&dyn Fn(usize) -> [f32; 4]>,
     ) -> Result<Vec<GlyphInstance>> {
         // Create cosmic-text buffer
         let metrics = Metrics::new(font_size, line_height);
@@ -62,13 +63,20 @@ impl TextRenderer {
                     // Add glyph to atlas
                     let atlas_pos = self.atlas.add_glyph(device, queue, &image)?;
 
+                    // Get color from callback or use white
+                    let color = if let Some(ref color_fn) = color_fn {
+                        color_fn(glyph.start)
+                    } else {
+                        [1.0, 1.0, 1.0, 1.0]
+                    };
+
                     // Create instance
                     instances.push(GlyphInstance {
                         position: [physical_glyph.x as f32, physical_glyph.y as f32],
                         size: [image.placement.width as f32, image.placement.height as f32],
                         uv_offset: atlas_pos.uv_offset,
                         uv_size: atlas_pos.uv_size,
-                        color: [1.0, 1.0, 1.0, 1.0], // White text
+                        color,
                     });
                 }
             }

@@ -11,6 +11,7 @@ mod cursor;
 mod file;
 mod input;
 mod renderer;
+mod syntax;
 mod text_renderer;
 mod ui;
 
@@ -20,6 +21,7 @@ use config::Config;
 use cursor::Cursor;
 use file::FileManager;
 use input::InputHandler;
+use syntax::SyntaxHighlighter;
 
 fn main() -> Result<()> {
     // Initialize logger
@@ -63,6 +65,15 @@ fn main() -> Result<()> {
     let mut file_manager = FileManager::new();
     log::info!("📁 File manager initialized");
 
+    // Create syntax highlighter (default to Rust)
+    let mut syntax_highlighter = SyntaxHighlighter::new("rs").ok();
+    let mut syntax_tokens = if let Some(ref mut highlighter) = syntax_highlighter {
+        highlighter.highlight(&buffer.text())
+    } else {
+        Vec::new()
+    };
+    log::info!("🎨 Syntax highlighter initialized");
+
     // Track buffer version to detect modifications
     let mut last_buffer_version = buffer.version();
 
@@ -88,6 +99,11 @@ fn main() -> Result<()> {
                         file_manager.set_modified(true);
                         last_buffer_version = buffer.version();
 
+                        // Re-highlight syntax
+                        if let Some(ref mut highlighter) = syntax_highlighter {
+                            syntax_tokens = highlighter.highlight(&buffer.text());
+                        }
+
                         // Update window title to show modification status
                         let title = if let Some(filename) = file_manager.current_file_name() {
                             if file_manager.is_modified() {
@@ -105,7 +121,7 @@ fn main() -> Result<()> {
                         window.set_title(&title);
                     }
 
-                    match renderer.render(&buffer, &cursor) {
+                    match renderer.render(&buffer, &cursor, &syntax_tokens) {
                         Ok(_) => {}
                         Err(e) => {
                             log::error!("Render error: {:?}", e);
