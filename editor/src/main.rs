@@ -8,6 +8,7 @@ use winit::{
 mod buffer;
 mod config;
 mod cursor;
+mod input;
 mod renderer;
 mod text_renderer;
 mod ui;
@@ -16,6 +17,7 @@ use renderer::Renderer;
 use buffer::Buffer;
 use config::Config;
 use cursor::Cursor;
+use input::InputHandler;
 
 fn main() -> Result<()> {
     // Initialize logger
@@ -51,6 +53,10 @@ fn main() -> Result<()> {
     let mut cursor = Cursor::new();
     log::info!("🖱️  Cursor initialized");
 
+    // Create input handler
+    let input_handler = InputHandler::new();
+    log::info!("⌨️  Input handler initialized");
+
     // Event loop
     log::info!("🔄 Entering event loop");
 
@@ -76,8 +82,17 @@ fn main() -> Result<()> {
                     }
                 }
                 WindowEvent::KeyboardInput { event, .. } => {
-                    // Handle keyboard input
-                    log::debug!("Key pressed: {:?}", event);
+                    // Handle special keys (arrows, backspace, etc.)
+                    input_handler.handle_key_event(&event, &mut buffer, &mut cursor);
+                    log::debug!("Key event: {:?}", event);
+                }
+                WindowEvent::Ime(ime_event) => {
+                    // Handle text input (typed characters)
+                    use winit::event::Ime;
+                    if let Ime::Commit(text) = ime_event {
+                        input_handler.handle_text_input(&text, &mut buffer, &mut cursor);
+                        log::debug!("Text input: {:?}", text);
+                    }
                 }
                 _ => {}
             },
