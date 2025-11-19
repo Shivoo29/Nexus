@@ -127,7 +127,13 @@ fn main() -> Result<()> {
                         window.set_title(&title);
                     }
 
-                    match renderer.render(&buffer, &cursor, &syntax_tokens) {
+                    match renderer.render(
+                        &buffer,
+                        &cursor,
+                        &syntax_tokens,
+                        file_manager.current_file_name(),
+                        file_manager.is_modified(),
+                    ) {
                         Ok(_) => {}
                         Err(e) => {
                             log::error!("Render error: {:?}", e);

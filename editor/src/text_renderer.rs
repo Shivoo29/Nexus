@@ -85,6 +85,60 @@ impl TextRenderer {
         Ok(instances)
     }
 
+    pub fn render_text_at_position(
+        &mut self,
+        device: &Device,
+        queue: &Queue,
+        text: &str,
+        font_size: f32,
+        x: f32,
+        y: f32,
+        color: [f32; 4],
+    ) -> Result<Vec<GlyphInstance>> {
+        // Create cosmic-text buffer
+        let metrics = Metrics::new(font_size, font_size * 1.2);
+        let mut buffer = TextBuffer::new(&mut self.font_system, metrics);
+
+        // Set text
+        buffer.set_text(&mut self.font_system, text, Attrs::new(), cosmic_text::Shaping::Advanced);
+
+        // Layout text
+        buffer.set_size(&mut self.font_system, 1280.0, 800.0);
+        buffer.shape_until_scroll(&mut self.font_system);
+
+        let mut instances = Vec::new();
+
+        // Process each line
+        for run in buffer.layout_runs() {
+            for glyph in run.glyphs.iter() {
+                // Get cache key from glyph
+                let physical_glyph = glyph.physical((0., 0.), 1.0);
+                let cache_key = physical_glyph.cache_key;
+
+                // Rasterize glyph if not in cache
+                let image_opt = self
+                    .swash_cache
+                    .get_image(&mut self.font_system, cache_key);
+
+                if let Some(image) = image_opt {
+                    // Add glyph to atlas
+                    let atlas_pos = self.atlas.add_glyph(device, queue, &image)?;
+
+                    // Create instance with custom position
+                    instances.push(GlyphInstance {
+                        position: [physical_glyph.x as f32 + x, physical_glyph.y as f32 + y],
+                        size: [image.placement.width as f32, image.placement.height as f32],
+                        uv_offset: atlas_pos.uv_offset,
+                        uv_size: atlas_pos.uv_size,
+                        color,
+                    });
+                }
+            }
+        }
+
+        Ok(instances)
+    }
+
     pub fn atlas_texture(&self) -> &wgpu::Texture {
         &self.atlas.texture
     }

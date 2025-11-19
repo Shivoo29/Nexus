@@ -409,7 +409,14 @@ impl Renderer {
         }
     }
 
-    pub fn render(&mut self, buffer: &Buffer, cursor: &Cursor, syntax_tokens: &[Token]) -> Result<()> {
+    pub fn render(
+        &mut self,
+        buffer: &Buffer,
+        cursor: &Cursor,
+        syntax_tokens: &[Token],
+        filename: Option<&str>,
+        is_modified: bool,
+    ) -> Result<()> {
         // Get current frame
         let output = self.surface.get_current_texture()?;
         let view = output
@@ -444,12 +451,51 @@ impl Renderer {
             Some(&color_fn),
         )?;
 
+        // Create status bar text
+        let file_display = if let Some(name) = filename {
+            if is_modified {
+                format!("{}*", name)
+            } else {
+                name.to_string()
+            }
+        } else {
+            if is_modified {
+                "Untitled*".to_string()
+            } else {
+                "Untitled".to_string()
+            }
+        };
+
+        let status_text = format!(
+            " {} | Line {}, Col {} | {} lines",
+            file_display,
+            cursor.position.line + 1,
+            cursor.position.column + 1,
+            line_count
+        );
+
+        // Render status bar text
+        let status_bar_y = (self.size.height as f32) - 24.0 + 4.0; // Add small padding
+        let status_instances = self.text_renderer.render_text_at_position(
+            &self.device,
+            &self.queue,
+            &status_text,
+            12.0, // Smaller font for status bar
+            4.0, // x position (left padding)
+            status_bar_y,
+            [0.7, 0.7, 0.7, 1.0], // Light gray text
+        )?;
+
+        // Combine text instances (main text + status bar)
+        let mut all_instances = instances;
+        all_instances.extend(status_instances);
+
         // Update text instance buffer
-        if !instances.is_empty() {
+        if !all_instances.is_empty() {
             self.queue.write_buffer(
                 &self.text_instance_buffer,
                 0,
-                bytemuck::cast_slice(&instances),
+                bytemuck::cast_slice(&all_instances),
             );
         }
 
@@ -510,6 +556,17 @@ impl Renderer {
             }
         }
 
+        // Add status bar background
+        let status_bar_height = 24.0;
+        let window_height = self.size.height as f32;
+        let status_bar_y = window_height - status_bar_height;
+
+        rect_instances.push(RectInstance {
+            position: [0.0, status_bar_y],
+            size: [self.size.width as f32, status_bar_height],
+            color: [0.08, 0.08, 0.08, 1.0], // Darker background for status bar
+        });
+
         // Update rect instance buffer
         if !rect_instances.is_empty() {
             self.queue.write_buffer(
@@ -558,12 +615,12 @@ impl Renderer {
             }
 
             // Render text on top
-            if !instances.is_empty() {
+            if !all_instances.is_empty() {
                 render_pass.set_pipeline(&self.text_pipeline);
                 render_pass.set_bind_group(0, &self.text_bind_group, &[]);
                 render_pass.set_vertex_buffer(0, self.vertex_buffer.slice(..));
                 render_pass.set_vertex_buffer(1, self.text_instance_buffer.slice(..));
-                render_pass.draw(0..6, 0..instances.len() as u32);
+                render_pass.draw(0..6, 0..all_instances.len() as u32);
             }
         }
 
