@@ -66,6 +66,7 @@ pub struct Renderer {
     text_instance_buffer: WgpuBuffer,
     rect_instance_buffer: WgpuBuffer,
     uniform_buffer: WgpuBuffer,
+    pub scroll_offset: f32, // Vertical scroll offset in pixels
 }
 
 impl Renderer {
@@ -394,6 +395,7 @@ impl Renderer {
             text_instance_buffer,
             rect_instance_buffer,
             uniform_buffer,
+            scroll_offset: 0.0,
         })
     }
 
@@ -463,10 +465,10 @@ impl Renderer {
             Some(&color_fn),
         )?;
 
-        // Apply offset to all text instances
+        // Apply offset to all text instances (including scroll)
         for instance in instances.iter_mut() {
             instance.position[0] += text_offset_x;
-            instance.position[1] += text_offset_y;
+            instance.position[1] += text_offset_y - self.scroll_offset;
         }
 
         // Create status bar text
@@ -641,10 +643,10 @@ impl Renderer {
 
         // Add cursor rectangle if should draw
         if cursor.should_draw() {
-            // Account for line numbers gutter
+            // Account for line numbers gutter and scroll
             let gutter_width_px = gutter_width as f32 * 8.0;
             let cursor_x = text_offset_x + gutter_width_px + (cursor.position.column as f32 * 8.0);
-            let cursor_y = text_offset_y + (cursor.position.line as f32 * 18.0);
+            let cursor_y = text_offset_y + (cursor.position.line as f32 * 18.0) - self.scroll_offset;
             rect_instances.push(RectInstance {
                 position: [cursor_x, cursor_y],
                 size: [2.0, 18.0], // 2px wide cursor
@@ -654,12 +656,12 @@ impl Renderer {
 
         // Add selection rectangles if any
         if let Some(ref selection) = cursor.selection {
-            // Account for line numbers gutter
+            // Account for line numbers gutter and scroll
             let gutter_width_px = gutter_width as f32 * 8.0;
             let start_x = text_offset_x + gutter_width_px + (selection.start.column as f32 * 8.0);
-            let start_y = text_offset_y + (selection.start.line as f32 * 18.0);
+            let start_y = text_offset_y + (selection.start.line as f32 * 18.0) - self.scroll_offset;
             let end_x = text_offset_x + gutter_width_px + (selection.end.column as f32 * 8.0);
-            let _end_y = text_offset_y + (selection.end.line as f32 * 18.0);
+            let _end_y = text_offset_y + (selection.end.line as f32 * 18.0) - self.scroll_offset;
 
             if selection.start.line == selection.end.line {
                 // Single line selection
@@ -671,7 +673,7 @@ impl Renderer {
             } else {
                 // Multi-line selection (improved)
                 for line in selection.start.line..=selection.end.line {
-                    let y = text_offset_y + (line as f32 * 18.0);
+                    let y = text_offset_y + (line as f32 * 18.0) - self.scroll_offset;
                     let line_start_x = text_offset_x + gutter_width_px;
                     let max_line_width = self.size.width as f32 - line_start_x;
 

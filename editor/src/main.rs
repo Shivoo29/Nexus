@@ -108,6 +108,25 @@ fn main() -> Result<()> {
                 WindowEvent::Resized(physical_size) => {
                     renderer.resize(physical_size);
                 }
+                WindowEvent::MouseWheel { delta, .. } => {
+                    // Handle scrolling
+                    use winit::event::MouseScrollDelta;
+                    let scroll_amount = match delta {
+                        MouseScrollDelta::LineDelta(_x, y) => y * 54.0, // 3 lines * 18px per line
+                        MouseScrollDelta::PixelDelta(pos) => pos.y as f32,
+                    };
+
+                    // Update scroll offset (negative scroll amount = scroll down)
+                    renderer.scroll_offset -= scroll_amount;
+
+                    // Clamp scroll to valid range
+                    let active_tab = tab_manager.active_tab();
+                    let max_scroll = (active_tab.buffer.line_count() as f32 * 18.0)
+                        .max(0.0) - 200.0; // Allow some overscroll at bottom
+                    renderer.scroll_offset = renderer.scroll_offset.max(0.0).min(max_scroll);
+
+                    log::debug!("Scroll offset: {:.1}", renderer.scroll_offset);
+                }
                 WindowEvent::RedrawRequested => {
                     // Get tab info before borrowing
                     let tab_index = tab_manager.active_index();
@@ -338,6 +357,23 @@ fn main() -> Result<()> {
                                         }
                                         return;
                                     }
+                                }
+                                KeyCode::PageUp => {
+                                    // Page Up - Scroll up one page
+                                    renderer.scroll_offset -= 400.0; // ~22 lines
+                                    renderer.scroll_offset = renderer.scroll_offset.max(0.0);
+                                    log::debug!("Page Up - Scroll: {:.1}", renderer.scroll_offset);
+                                    return;
+                                }
+                                KeyCode::PageDown => {
+                                    // Page Down - Scroll down one page
+                                    renderer.scroll_offset += 400.0; // ~22 lines
+                                    let active_tab = tab_manager.active_tab();
+                                    let max_scroll = (active_tab.buffer.line_count() as f32 * 18.0)
+                                        .max(0.0) - 200.0;
+                                    renderer.scroll_offset = renderer.scroll_offset.min(max_scroll);
+                                    log::debug!("Page Down - Scroll: {:.1}", renderer.scroll_offset);
+                                    return;
                                 }
                                 _ => {}
                             }
