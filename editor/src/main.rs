@@ -178,6 +178,8 @@ fn main() -> Result<()> {
                             let is_ctrl_w = event.logical_key == winit::keyboard::Key::Character("w".into());
                             let is_ctrl_t = event.logical_key == winit::keyboard::Key::Character("t".into());
                             let is_ctrl_b = event.logical_key == winit::keyboard::Key::Character("b".into());
+                            let is_ctrl_z = event.logical_key == winit::keyboard::Key::Character("z".into());
+                            let is_ctrl_y = event.logical_key == winit::keyboard::Key::Character("y".into());
 
                             match key_code {
                                 KeyCode::KeyS if is_ctrl_s => {
@@ -219,6 +221,44 @@ fn main() -> Result<()> {
                                 KeyCode::KeyX if is_ctrl_x => {
                                     let active_tab = tab_manager.active_tab_mut();
                                     input_handler.cut(&mut active_tab.buffer, &mut active_tab.cursor);
+                                    return;
+                                }
+                                KeyCode::KeyZ if is_ctrl_z => {
+                                    // Ctrl+Z - Undo
+                                    let active_tab = tab_manager.active_tab_mut();
+                                    if active_tab.buffer.undo() {
+                                        // Clamp cursor position to valid range
+                                        let line_count = active_tab.buffer.line_count();
+                                        if active_tab.cursor.position.line >= line_count {
+                                            active_tab.cursor.position.line = line_count.saturating_sub(1);
+                                        }
+                                        let line_len = active_tab.buffer.line_len(active_tab.cursor.position.line);
+                                        if active_tab.cursor.position.column > line_len {
+                                            active_tab.cursor.position.column = line_len;
+                                        }
+                                        log::info!("↶ Undo");
+                                    } else {
+                                        log::info!("↶ Nothing to undo");
+                                    }
+                                    return;
+                                }
+                                KeyCode::KeyY if is_ctrl_y => {
+                                    // Ctrl+Y - Redo
+                                    let active_tab = tab_manager.active_tab_mut();
+                                    if active_tab.buffer.redo() {
+                                        // Clamp cursor position to valid range
+                                        let line_count = active_tab.buffer.line_count();
+                                        if active_tab.cursor.position.line >= line_count {
+                                            active_tab.cursor.position.line = line_count.saturating_sub(1);
+                                        }
+                                        let line_len = active_tab.buffer.line_len(active_tab.cursor.position.line);
+                                        if active_tab.cursor.position.column > line_len {
+                                            active_tab.cursor.position.column = line_len;
+                                        }
+                                        log::info!("↷ Redo");
+                                    } else {
+                                        log::info!("↷ Nothing to redo");
+                                    }
                                     return;
                                 }
                                 KeyCode::KeyW if is_ctrl_w => {
