@@ -455,7 +455,7 @@ impl Renderer {
             let start_x = selection.start.column as f32 * 8.0;
             let start_y = selection.start.line as f32 * 18.0;
             let end_x = selection.end.column as f32 * 8.0;
-            let end_y = selection.end.line as f32 * 18.0;
+            let _end_y = selection.end.line as f32 * 18.0;
 
             if selection.start.line == selection.end.line {
                 // Single line selection

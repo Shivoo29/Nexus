@@ -8,6 +8,7 @@ use winit::{
 mod buffer;
 mod config;
 mod cursor;
+mod file;
 mod input;
 mod renderer;
 mod text_renderer;
@@ -17,6 +18,7 @@ use renderer::Renderer;
 use buffer::Buffer;
 use config::Config;
 use cursor::Cursor;
+use file::FileManager;
 use input::InputHandler;
 
 fn main() -> Result<()> {
@@ -57,6 +59,13 @@ fn main() -> Result<()> {
     let input_handler = InputHandler::new();
     log::info!("⌨️  Input handler initialized");
 
+    // Create file manager
+    let mut file_manager = FileManager::new();
+    log::info!("📁 File manager initialized");
+
+    // Track buffer version to detect modifications
+    let mut last_buffer_version = buffer.version();
+
     // Event loop
     log::info!("🔄 Entering event loop");
 
@@ -74,6 +83,28 @@ fn main() -> Result<()> {
                     // Update cursor blink (assume 16ms frame time)
                     cursor.update_blink(0.016);
 
+                    // Check if buffer has been modified
+                    if buffer.version() != last_buffer_version {
+                        file_manager.set_modified(true);
+                        last_buffer_version = buffer.version();
+
+                        // Update window title to show modification status
+                        let title = if let Some(filename) = file_manager.current_file_name() {
+                            if file_manager.is_modified() {
+                                format!("Nexus - {}*", filename)
+                            } else {
+                                format!("Nexus - {}", filename)
+                            }
+                        } else {
+                            if file_manager.is_modified() {
+                                "Nexus - Untitled*".to_string()
+                            } else {
+                                "Nexus - Untitled".to_string()
+                            }
+                        };
+                        window.set_title(&title);
+                    }
+
                     match renderer.render(&buffer, &cursor) {
                         Ok(_) => {}
                         Err(e) => {
@@ -82,7 +113,45 @@ fn main() -> Result<()> {
                     }
                 }
                 WindowEvent::KeyboardInput { event, .. } => {
-                    // Handle special keys (arrows, backspace, etc.)
+                    use winit::event::ElementState;
+
+                    // Check for Ctrl+S (save)
+                    if event.state == ElementState::Pressed {
+                        if let winit::keyboard::PhysicalKey::Code(key_code) = event.physical_key {
+                            use winit::keyboard::KeyCode;
+
+                            // Get modifier state (we'll approximate Ctrl detection)
+                            let is_ctrl = event.logical_key == winit::keyboard::Key::Character("s".into())
+                                       || event.logical_key == winit::keyboard::Key::Character("o".into());
+
+                            match key_code {
+                                KeyCode::KeyS if is_ctrl => {
+                                    // Ctrl+S - Save file
+                                    if file_manager.current_file().is_some() {
+                                        match file_manager.save(&buffer) {
+                                            Ok(_) => log::info!("✅ File saved"),
+                                            Err(e) => log::error!("❌ Save failed: {}", e),
+                                        }
+                                    } else {
+                                        // No file open, save as "untitled.txt"
+                                        match file_manager.save_as("untitled.txt", &buffer) {
+                                            Ok(_) => log::info!("✅ File saved as untitled.txt"),
+                                            Err(e) => log::error!("❌ Save failed: {}", e),
+                                        }
+                                    }
+                                    return;
+                                }
+                                KeyCode::KeyO if is_ctrl => {
+                                    // Ctrl+O - Open file (for now, just log)
+                                    log::info!("📂 Open file dialog (not implemented yet)");
+                                    return;
+                                }
+                                _ => {}
+                            }
+                        }
+                    }
+
+                    // Handle normal keyboard input
                     input_handler.handle_key_event(&event, &mut buffer, &mut cursor);
                     log::debug!("Key event: {:?}", event);
                 }
