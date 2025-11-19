@@ -11,6 +11,7 @@ mod cursor;
 mod file;
 mod input;
 mod renderer;
+mod search;
 mod syntax;
 mod text_renderer;
 mod ui;
@@ -21,6 +22,7 @@ use config::Config;
 use cursor::Cursor;
 use file::FileManager;
 use input::InputHandler;
+use search::SearchState;
 use syntax::SyntaxHighlighter;
 
 fn main() -> Result<()> {
@@ -73,6 +75,10 @@ fn main() -> Result<()> {
         Vec::new()
     };
     log::info!("🎨 Syntax highlighter initialized");
+
+    // Create search state
+    let mut search_state = SearchState::new();
+    log::info!("🔍 Search state initialized");
 
     // Track buffer version to detect modifications
     let mut last_buffer_version = buffer.version();
@@ -142,6 +148,8 @@ fn main() -> Result<()> {
                             let is_ctrl_c = event.logical_key == winit::keyboard::Key::Character("c".into());
                             let is_ctrl_v = event.logical_key == winit::keyboard::Key::Character("v".into());
                             let is_ctrl_x = event.logical_key == winit::keyboard::Key::Character("x".into());
+                            let is_ctrl_f = event.logical_key == winit::keyboard::Key::Character("f".into());
+                            let is_ctrl_h = event.logical_key == winit::keyboard::Key::Character("h".into());
 
                             match key_code {
                                 KeyCode::KeyS if is_ctrl_s => {
@@ -175,21 +183,96 @@ fn main() -> Result<()> {
                                     input_handler.cut(&mut buffer, &mut cursor);
                                     return;
                                 }
+                                KeyCode::KeyF if is_ctrl_f => {
+                                    // Ctrl+F - Open find dialog
+                                    if !search_state.is_active {
+                                        search_state.activate();
+                                        log::info!("🔍 Find dialog opened");
+                                    }
+                                    return;
+                                }
+                                KeyCode::KeyH if is_ctrl_h => {
+                                    // Ctrl+H - Open find/replace dialog
+                                    if !search_state.is_active {
+                                        search_state.activate();
+                                    }
+                                    search_state.is_replace_mode = true;
+                                    log::info!("🔄 Find/Replace dialog opened");
+                                    return;
+                                }
+                                KeyCode::Escape => {
+                                    // Escape - Close search dialog
+                                    if search_state.is_active {
+                                        search_state.deactivate();
+                                        log::info!("🔍 Search dialog closed");
+                                        return;
+                                    }
+                                }
+                                KeyCode::F3 => {
+                                    // F3 - Find next
+                                    if search_state.is_active && !search_state.matches.is_empty() {
+                                        search_state.find_next();
+                                        if let Some(match_item) = search_state.current_match() {
+                                            cursor.position.line = match_item.start_line;
+                                            cursor.position.column = match_item.start_column;
+                                            log::info!("🔍 Found match {}/{}",
+                                                search_state.current_match_index.unwrap_or(0) + 1,
+                                                search_state.match_count());
+                                        }
+                                        return;
+                                    }
+                                }
                                 _ => {}
                             }
                         }
                     }
 
                     // Handle normal keyboard input
-                    input_handler.handle_key_event(&event, &mut buffer, &mut cursor);
-                    log::debug!("Key event: {:?}", event);
+                    if !search_state.is_active {
+                        input_handler.handle_key_event(&event, &mut buffer, &mut cursor);
+                        log::debug!("Key event: {:?}", event);
+                    } else {
+                        // Handle search input (backspace, etc.)
+                        if event.state == ElementState::Pressed {
+                            if let winit::keyboard::PhysicalKey::Code(key_code) = event.physical_key {
+                                use winit::keyboard::KeyCode;
+                                match key_code {
+                                    KeyCode::Backspace => {
+                                        if !search_state.query.is_empty() {
+                                            search_state.query.pop();
+                                            search_state.find_all_matches(&buffer);
+                                        }
+                                    }
+                                    KeyCode::Enter => {
+                                        // Enter - Find next
+                                        if !search_state.matches.is_empty() {
+                                            search_state.find_next();
+                                            if let Some(match_item) = search_state.current_match() {
+                                                cursor.position.line = match_item.start_line;
+                                                cursor.position.column = match_item.start_column;
+                                            }
+                                        }
+                                    }
+                                    _ => {}
+                                }
+                            }
+                        }
+                    }
                 }
                 WindowEvent::Ime(ime_event) => {
                     // Handle text input (typed characters)
                     use winit::event::Ime;
                     if let Ime::Commit(text) = ime_event {
-                        input_handler.handle_text_input(&text, &mut buffer, &mut cursor);
-                        log::debug!("Text input: {:?}", text);
+                        if search_state.is_active {
+                            // Update search query
+                            search_state.query.push_str(&text);
+                            search_state.find_all_matches(&buffer);
+                            log::debug!("Search query: {:?} ({} matches)", search_state.query, search_state.match_count());
+                        } else {
+                            // Normal text input
+                            input_handler.handle_text_input(&text, &mut buffer, &mut cursor);
+                            log::debug!("Text input: {:?}", text);
+                        }
                     }
                 }
                 _ => {}
