@@ -426,12 +426,19 @@ impl Renderer {
             [1.0, 1.0, 1.0, 1.0] // Default white
         };
 
+        // Prepare text with line numbers
+        let line_count = buffer.line_count();
+        let gutter_width = (line_count.to_string().len() + 2) as usize;
+        let mut text_with_lines = String::new();
+        for (idx, line) in buffer.text().lines().enumerate() {
+            text_with_lines.push_str(&format!("{:width$} {}\n", idx + 1, line, width = gutter_width - 1));
+        }
+
         // Render text to get glyph instances
-        let text = buffer.text();
         let instances = self.text_renderer.render_text(
             &self.device,
             &self.queue,
-            &text,
+            &text_with_lines,
             14.0, // font size
             18.0, // line height
             Some(&color_fn),

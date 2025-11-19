@@ -2,12 +2,63 @@ use winit::event::{KeyEvent, ElementState};
 use winit::keyboard::{KeyCode, PhysicalKey};
 use crate::buffer::Buffer;
 use crate::cursor::Cursor;
+use arboard::Clipboard;
 
-pub struct InputHandler;
+pub struct InputHandler {
+    clipboard: Option<Clipboard>,
+}
 
 impl InputHandler {
     pub fn new() -> Self {
-        Self
+        Self {
+            clipboard: Clipboard::new().ok(),
+        }
+    }
+
+    pub fn copy(&mut self, buffer: &Buffer, cursor: &Cursor) {
+        if let Some(ref selection) = cursor.selection {
+            let start = buffer.position_to_offset(selection.start.line, selection.start.column);
+            let end = buffer.position_to_offset(selection.end.line, selection.end.column);
+            let (start, end) = if start <= end { (start, end) } else { (end, start) };
+
+            let text = buffer.text_range(start..end);
+
+            if let Some(ref mut clipboard) = self.clipboard {
+                let _ = clipboard.set_text(text);
+                log::info!("📋 Copied to clipboard");
+            }
+        }
+    }
+
+    pub fn cut(&mut self, buffer: &mut Buffer, cursor: &mut Cursor) {
+        self.copy(buffer, cursor);
+        self.delete_selection(buffer, cursor);
+        log::info!("✂️  Cut to clipboard");
+    }
+
+    pub fn paste(&mut self, buffer: &mut Buffer, cursor: &mut Cursor) {
+        if let Some(ref mut clipboard) = self.clipboard {
+            if let Ok(text) = clipboard.get_text() {
+                if cursor.has_selection() {
+                    self.delete_selection(buffer, cursor);
+                }
+
+                let pos = self.cursor_to_byte_offset(buffer, cursor);
+                buffer.insert_text(pos, &text);
+
+                // Update cursor position
+                for ch in text.chars() {
+                    if ch == '\n' {
+                        cursor.position.line += 1;
+                        cursor.position.column = 0;
+                    } else {
+                        cursor.position.column += 1;
+                    }
+                }
+
+                log::info!("📌 Pasted from clipboard");
+            }
+        }
     }
 
     pub fn handle_key_event(&self, event: &KeyEvent, buffer: &mut Buffer, cursor: &mut Cursor) {

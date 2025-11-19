@@ -58,7 +58,7 @@ fn main() -> Result<()> {
     log::info!("🖱️  Cursor initialized");
 
     // Create input handler
-    let input_handler = InputHandler::new();
+    let mut input_handler = InputHandler::new();
     log::info!("⌨️  Input handler initialized");
 
     // Create file manager
@@ -136,12 +136,15 @@ fn main() -> Result<()> {
                         if let winit::keyboard::PhysicalKey::Code(key_code) = event.physical_key {
                             use winit::keyboard::KeyCode;
 
-                            // Get modifier state (we'll approximate Ctrl detection)
-                            let is_ctrl = event.logical_key == winit::keyboard::Key::Character("s".into())
-                                       || event.logical_key == winit::keyboard::Key::Character("o".into());
+                            // Detect Ctrl modifier
+                            let is_ctrl_s = event.logical_key == winit::keyboard::Key::Character("s".into());
+                            let is_ctrl_o = event.logical_key == winit::keyboard::Key::Character("o".into());
+                            let is_ctrl_c = event.logical_key == winit::keyboard::Key::Character("c".into());
+                            let is_ctrl_v = event.logical_key == winit::keyboard::Key::Character("v".into());
+                            let is_ctrl_x = event.logical_key == winit::keyboard::Key::Character("x".into());
 
                             match key_code {
-                                KeyCode::KeyS if is_ctrl => {
+                                KeyCode::KeyS if is_ctrl_s => {
                                     // Ctrl+S - Save file
                                     if file_manager.current_file().is_some() {
                                         match file_manager.save(&buffer) {
@@ -149,7 +152,6 @@ fn main() -> Result<()> {
                                             Err(e) => log::error!("❌ Save failed: {}", e),
                                         }
                                     } else {
-                                        // No file open, save as "untitled.txt"
                                         match file_manager.save_as("untitled.txt", &buffer) {
                                             Ok(_) => log::info!("✅ File saved as untitled.txt"),
                                             Err(e) => log::error!("❌ Save failed: {}", e),
@@ -157,9 +159,20 @@ fn main() -> Result<()> {
                                     }
                                     return;
                                 }
-                                KeyCode::KeyO if is_ctrl => {
-                                    // Ctrl+O - Open file (for now, just log)
+                                KeyCode::KeyO if is_ctrl_o => {
                                     log::info!("📂 Open file dialog (not implemented yet)");
+                                    return;
+                                }
+                                KeyCode::KeyC if is_ctrl_c => {
+                                    input_handler.copy(&buffer, &cursor);
+                                    return;
+                                }
+                                KeyCode::KeyV if is_ctrl_v => {
+                                    input_handler.paste(&mut buffer, &mut cursor);
+                                    return;
+                                }
+                                KeyCode::KeyX if is_ctrl_x => {
+                                    input_handler.cut(&mut buffer, &mut cursor);
                                     return;
                                 }
                                 _ => {}
