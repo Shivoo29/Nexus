@@ -9,6 +9,7 @@ mod buffer;
 mod config;
 mod cursor;
 mod file;
+mod file_tree;
 mod input;
 mod renderer;
 mod search;
@@ -20,10 +21,12 @@ mod ui;
 use renderer::Renderer;
 use config::Config;
 use file::FileManager;
+use file_tree::FileTree;
 use input::InputHandler;
 use search::SearchState;
 use syntax::SyntaxHighlighter;
 use tabs::{Tab, TabManager};
+use std::env;
 
 fn main() -> Result<()> {
     // Initialize logger
@@ -75,6 +78,19 @@ fn main() -> Result<()> {
     // Create search state
     let mut search_state = SearchState::new();
     log::info!("🔍 Search state initialized");
+
+    // Create file tree explorer
+    let current_dir = env::current_dir()?;
+    let mut file_tree = FileTree::new(current_dir).unwrap_or_else(|e| {
+        log::warn!("Failed to create file tree: {}. Using empty tree.", e);
+        FileTree {
+            nodes: Vec::new(),
+            selected_index: 0,
+            is_visible: false,
+            root_path: env::current_dir().unwrap_or_default(),
+        }
+    });
+    log::info!("🌳 File tree initialized");
 
     // Track buffer version to detect modifications
     let mut last_buffer_version = tab_manager.active_tab().buffer.version();
@@ -153,6 +169,7 @@ fn main() -> Result<()> {
                             let is_ctrl_h = event.logical_key == winit::keyboard::Key::Character("h".into());
                             let is_ctrl_w = event.logical_key == winit::keyboard::Key::Character("w".into());
                             let is_ctrl_t = event.logical_key == winit::keyboard::Key::Character("t".into());
+                            let is_ctrl_b = event.logical_key == winit::keyboard::Key::Character("b".into());
 
                             match key_code {
                                 KeyCode::KeyS if is_ctrl_s => {
@@ -219,6 +236,21 @@ fn main() -> Result<()> {
                                     last_buffer_version = tab_manager.active_tab().buffer.version();
                                     return;
                                 }
+                                KeyCode::KeyB if is_ctrl_b => {
+                                    // Ctrl+B - Toggle file tree
+                                    file_tree.toggle_visibility();
+                                    if file_tree.is_visible {
+                                        log::info!("🌳 File tree opened");
+                                        log::info!("📁 Current directory: {}", file_tree.root_path.display());
+                                        log::info!("   {} files/folders found", file_tree.nodes.len());
+                                        if let Some(node) = file_tree.get_selected_node() {
+                                            log::info!("   Selected: {}", node.name);
+                                        }
+                                    } else {
+                                        log::info!("🌳 File tree closed");
+                                    }
+                                    return;
+                                }
                                 KeyCode::KeyF if is_ctrl_f => {
                                     // Ctrl+F - Open find dialog
                                     if !search_state.is_active {
@@ -265,6 +297,48 @@ fn main() -> Result<()> {
                     }
 
                     // Handle normal keyboard input
+                    // Check if file tree is handling input
+                    if file_tree.is_visible {
+                        // File tree navigation
+                        if event.state == ElementState::Pressed {
+                            if let winit::keyboard::PhysicalKey::Code(key_code) = event.physical_key {
+                                use winit::keyboard::KeyCode;
+                                match key_code {
+                                    KeyCode::ArrowUp => {
+                                        file_tree.move_selection_up();
+                                        if let Some(node) = file_tree.get_selected_node() {
+                                            log::info!("🌳 Selected: {}", node.name);
+                                        }
+                                        return;
+                                    }
+                                    KeyCode::ArrowDown => {
+                                        file_tree.move_selection_down();
+                                        if let Some(node) = file_tree.get_selected_node() {
+                                            log::info!("🌳 Selected: {}", node.name);
+                                        }
+                                        return;
+                                    }
+                                    KeyCode::Enter => {
+                                        if let Err(e) = file_tree.toggle_selected_expand() {
+                                            log::error!("❌ Failed to expand: {}", e);
+                                        } else if let Some(node) = file_tree.get_selected_node() {
+                                            if node.is_dir {
+                                                log::info!("📁 Toggled: {}", node.name);
+                                            } else {
+                                                log::info!("📄 Selected file: {}", node.path.display());
+                                                // TODO: Open file in new tab
+                                            }
+                                        }
+                                        return;
+                                    }
+                                    _ => {}
+                                }
+                            }
+                        }
+                        // Don't fall through to normal input handling when file tree is visible
+                        return;
+                    }
+
                     let active_tab = tab_manager.active_tab_mut();
                     if !search_state.is_active {
                         input_handler.handle_key_event(&event, &mut active_tab.buffer, &mut active_tab.cursor);
