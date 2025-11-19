@@ -13,17 +13,17 @@ mod input;
 mod renderer;
 mod search;
 mod syntax;
+mod tabs;
 mod text_renderer;
 mod ui;
 
 use renderer::Renderer;
-use buffer::Buffer;
 use config::Config;
-use cursor::Cursor;
 use file::FileManager;
 use input::InputHandler;
 use search::SearchState;
 use syntax::SyntaxHighlighter;
+use tabs::{Tab, TabManager};
 
 fn main() -> Result<()> {
     // Initialize logger
@@ -50,14 +50,10 @@ fn main() -> Result<()> {
     let mut renderer = pollster::block_on(Renderer::new(&window))?;
     log::info!("🎨 GPU renderer initialized");
 
-    // Create text buffer
-    let mut buffer = Buffer::new();
-    buffer.insert_text(0, "// Welcome to Nexus!\n// The AI-native code editor that doesn't suck.\n\nfn main() {\n    println!(\"Hello, World!\");\n}\n");
-    log::info!("📝 Text buffer initialized");
-
-    // Create cursor
-    let mut cursor = Cursor::new();
-    log::info!("🖱️  Cursor initialized");
+    // Create tab manager
+    let mut tab_manager = TabManager::new();
+    tab_manager.active_tab_mut().buffer.insert_text(0, "// Welcome to Nexus!\n// The AI-native code editor that doesn't suck.\n\nfn main() {\n    println!(\"Hello, World!\");\n}\n");
+    log::info!("📑 Tab manager initialized");
 
     // Create input handler
     let mut input_handler = InputHandler::new();
@@ -70,7 +66,7 @@ fn main() -> Result<()> {
     // Create syntax highlighter (default to Rust)
     let mut syntax_highlighter = SyntaxHighlighter::new("rs").ok();
     let mut syntax_tokens = if let Some(ref mut highlighter) = syntax_highlighter {
-        highlighter.highlight(&buffer.text())
+        highlighter.highlight(&tab_manager.active_tab().buffer.text())
     } else {
         Vec::new()
     };
@@ -81,7 +77,7 @@ fn main() -> Result<()> {
     log::info!("🔍 Search state initialized");
 
     // Track buffer version to detect modifications
-    let mut last_buffer_version = buffer.version();
+    let mut last_buffer_version = tab_manager.active_tab().buffer.version();
 
     // Event loop
     log::info!("🔄 Entering event loop");
@@ -97,42 +93,41 @@ fn main() -> Result<()> {
                     renderer.resize(physical_size);
                 }
                 WindowEvent::RedrawRequested => {
+                    // Get tab info before borrowing
+                    let tab_index = tab_manager.active_index();
+                    let tab_count = tab_manager.tab_count();
+
+                    let active_tab = tab_manager.active_tab_mut();
+
                     // Update cursor blink (assume 16ms frame time)
-                    cursor.update_blink(0.016);
+                    active_tab.cursor.update_blink(0.016);
 
                     // Check if buffer has been modified
-                    if buffer.version() != last_buffer_version {
-                        file_manager.set_modified(true);
-                        last_buffer_version = buffer.version();
+                    if active_tab.buffer.version() != last_buffer_version {
+                        active_tab.is_modified = true;
+                        last_buffer_version = active_tab.buffer.version();
 
                         // Re-highlight syntax
                         if let Some(ref mut highlighter) = syntax_highlighter {
-                            syntax_tokens = highlighter.highlight(&buffer.text());
+                            syntax_tokens = highlighter.highlight(&active_tab.buffer.text());
                         }
 
                         // Update window title to show modification status
-                        let title = if let Some(filename) = file_manager.current_file_name() {
-                            if file_manager.is_modified() {
-                                format!("Nexus - {}*", filename)
-                            } else {
-                                format!("Nexus - {}", filename)
-                            }
-                        } else {
-                            if file_manager.is_modified() {
-                                "Nexus - Untitled*".to_string()
-                            } else {
-                                "Nexus - Untitled".to_string()
-                            }
-                        };
+                        let title = format!(
+                            "Nexus - {} ({}/{})",
+                            active_tab.display_title(),
+                            tab_index + 1,
+                            tab_count
+                        );
                         window.set_title(&title);
                     }
 
                     match renderer.render(
-                        &buffer,
-                        &cursor,
+                        &active_tab.buffer,
+                        &active_tab.cursor,
                         &syntax_tokens,
-                        file_manager.current_file_name(),
-                        file_manager.is_modified(),
+                        active_tab.file_path.as_ref().and_then(|p| p.file_name()?.to_str()),
+                        active_tab.is_modified,
                     ) {
                         Ok(_) => {}
                         Err(e) => {
@@ -156,18 +151,27 @@ fn main() -> Result<()> {
                             let is_ctrl_x = event.logical_key == winit::keyboard::Key::Character("x".into());
                             let is_ctrl_f = event.logical_key == winit::keyboard::Key::Character("f".into());
                             let is_ctrl_h = event.logical_key == winit::keyboard::Key::Character("h".into());
+                            let is_ctrl_w = event.logical_key == winit::keyboard::Key::Character("w".into());
+                            let is_ctrl_t = event.logical_key == winit::keyboard::Key::Character("t".into());
 
                             match key_code {
                                 KeyCode::KeyS if is_ctrl_s => {
                                     // Ctrl+S - Save file
+                                    let active_tab = tab_manager.active_tab_mut();
                                     if file_manager.current_file().is_some() {
-                                        match file_manager.save(&buffer) {
-                                            Ok(_) => log::info!("✅ File saved"),
+                                        match file_manager.save(&active_tab.buffer) {
+                                            Ok(_) => {
+                                                active_tab.is_modified = false;
+                                                log::info!("✅ File saved");
+                                            }
                                             Err(e) => log::error!("❌ Save failed: {}", e),
                                         }
                                     } else {
-                                        match file_manager.save_as("untitled.txt", &buffer) {
-                                            Ok(_) => log::info!("✅ File saved as untitled.txt"),
+                                        match file_manager.save_as("untitled.txt", &active_tab.buffer) {
+                                            Ok(_) => {
+                                                active_tab.is_modified = false;
+                                                log::info!("✅ File saved as untitled.txt");
+                                            }
                                             Err(e) => log::error!("❌ Save failed: {}", e),
                                         }
                                     }
@@ -178,15 +182,41 @@ fn main() -> Result<()> {
                                     return;
                                 }
                                 KeyCode::KeyC if is_ctrl_c => {
-                                    input_handler.copy(&buffer, &cursor);
+                                    let active_tab = tab_manager.active_tab();
+                                    input_handler.copy(&active_tab.buffer, &active_tab.cursor);
                                     return;
                                 }
                                 KeyCode::KeyV if is_ctrl_v => {
-                                    input_handler.paste(&mut buffer, &mut cursor);
+                                    let active_tab = tab_manager.active_tab_mut();
+                                    input_handler.paste(&mut active_tab.buffer, &mut active_tab.cursor);
                                     return;
                                 }
                                 KeyCode::KeyX if is_ctrl_x => {
-                                    input_handler.cut(&mut buffer, &mut cursor);
+                                    let active_tab = tab_manager.active_tab_mut();
+                                    input_handler.cut(&mut active_tab.buffer, &mut active_tab.cursor);
+                                    return;
+                                }
+                                KeyCode::KeyW if is_ctrl_w => {
+                                    // Ctrl+W - Close active tab
+                                    if tab_manager.close_active_tab() {
+                                        log::info!("📑 Tab closed");
+                                        // Re-highlight the new active tab
+                                        if let Some(ref mut highlighter) = syntax_highlighter {
+                                            syntax_tokens = highlighter.highlight(&tab_manager.active_tab().buffer.text());
+                                        }
+                                        last_buffer_version = tab_manager.active_tab().buffer.version();
+                                    }
+                                    return;
+                                }
+                                KeyCode::KeyT if is_ctrl_t => {
+                                    // Ctrl+T - New tab
+                                    tab_manager.add_tab(Tab::new("Untitled".to_string()));
+                                    log::info!("📑 New tab created");
+                                    // Re-highlight the new tab
+                                    if let Some(ref mut highlighter) = syntax_highlighter {
+                                        syntax_tokens = highlighter.highlight(&tab_manager.active_tab().buffer.text());
+                                    }
+                                    last_buffer_version = tab_manager.active_tab().buffer.version();
                                     return;
                                 }
                                 KeyCode::KeyF if is_ctrl_f => {
@@ -219,8 +249,9 @@ fn main() -> Result<()> {
                                     if search_state.is_active && !search_state.matches.is_empty() {
                                         search_state.find_next();
                                         if let Some(match_item) = search_state.current_match() {
-                                            cursor.position.line = match_item.start_line;
-                                            cursor.position.column = match_item.start_column;
+                                            let active_tab = tab_manager.active_tab_mut();
+                                            active_tab.cursor.position.line = match_item.start_line;
+                                            active_tab.cursor.position.column = match_item.start_column;
                                             log::info!("🔍 Found match {}/{}",
                                                 search_state.current_match_index.unwrap_or(0) + 1,
                                                 search_state.match_count());
@@ -234,8 +265,9 @@ fn main() -> Result<()> {
                     }
 
                     // Handle normal keyboard input
+                    let active_tab = tab_manager.active_tab_mut();
                     if !search_state.is_active {
-                        input_handler.handle_key_event(&event, &mut buffer, &mut cursor);
+                        input_handler.handle_key_event(&event, &mut active_tab.buffer, &mut active_tab.cursor);
                         log::debug!("Key event: {:?}", event);
                     } else {
                         // Handle search input (backspace, etc.)
@@ -246,7 +278,7 @@ fn main() -> Result<()> {
                                     KeyCode::Backspace => {
                                         if !search_state.query.is_empty() {
                                             search_state.query.pop();
-                                            search_state.find_all_matches(&buffer);
+                                            search_state.find_all_matches(&active_tab.buffer);
                                         }
                                     }
                                     KeyCode::Enter => {
@@ -254,8 +286,8 @@ fn main() -> Result<()> {
                                         if !search_state.matches.is_empty() {
                                             search_state.find_next();
                                             if let Some(match_item) = search_state.current_match() {
-                                                cursor.position.line = match_item.start_line;
-                                                cursor.position.column = match_item.start_column;
+                                                active_tab.cursor.position.line = match_item.start_line;
+                                                active_tab.cursor.position.column = match_item.start_column;
                                             }
                                         }
                                     }
@@ -269,14 +301,15 @@ fn main() -> Result<()> {
                     // Handle text input (typed characters)
                     use winit::event::Ime;
                     if let Ime::Commit(text) = ime_event {
+                        let active_tab = tab_manager.active_tab_mut();
                         if search_state.is_active {
                             // Update search query
                             search_state.query.push_str(&text);
-                            search_state.find_all_matches(&buffer);
+                            search_state.find_all_matches(&active_tab.buffer);
                             log::debug!("Search query: {:?} ({} matches)", search_state.query, search_state.match_count());
                         } else {
                             // Normal text input
-                            input_handler.handle_text_input(&text, &mut buffer, &mut cursor);
+                            input_handler.handle_text_input(&text, &mut active_tab.buffer, &mut active_tab.cursor);
                             log::debug!("Text input: {:?}", text);
                         }
                     }

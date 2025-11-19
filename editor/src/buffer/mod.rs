@@ -2,6 +2,7 @@ use ropey::Rope;
 use std::ops::Range;
 
 /// Text buffer using rope data structure for efficient editing
+#[derive(Debug)]
 pub struct Buffer {
     rope: Rope,
     version: usize,
