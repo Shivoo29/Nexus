@@ -113,37 +113,45 @@ fn main() -> Result<()> {
                     let tab_index = tab_manager.active_index();
                     let tab_count = tab_manager.tab_count();
 
-                    let active_tab = tab_manager.active_tab_mut();
+                    // Update active tab (in a block to drop mutable borrow)
+                    {
+                        let active_tab = tab_manager.active_tab_mut();
 
-                    // Update cursor blink (assume 16ms frame time)
-                    active_tab.cursor.update_blink(0.016);
+                        // Update cursor blink (assume 16ms frame time)
+                        active_tab.cursor.update_blink(0.016);
 
-                    // Check if buffer has been modified
-                    if active_tab.buffer.version() != last_buffer_version {
-                        active_tab.is_modified = true;
-                        last_buffer_version = active_tab.buffer.version();
+                        // Check if buffer has been modified
+                        if active_tab.buffer.version() != last_buffer_version {
+                            active_tab.is_modified = true;
+                            last_buffer_version = active_tab.buffer.version();
 
-                        // Re-highlight syntax
-                        if let Some(ref mut highlighter) = syntax_highlighter {
-                            syntax_tokens = highlighter.highlight(&active_tab.buffer.text());
+                            // Re-highlight syntax
+                            if let Some(ref mut highlighter) = syntax_highlighter {
+                                syntax_tokens = highlighter.highlight(&active_tab.buffer.text());
+                            }
+
+                            // Update window title to show modification status
+                            let title = format!(
+                                "Nexus - {} ({}/{})",
+                                active_tab.display_title(),
+                                tab_index + 1,
+                                tab_count
+                            );
+                            window.set_title(&title);
                         }
+                    } // Drop mutable borrow here
 
-                        // Update window title to show modification status
-                        let title = format!(
-                            "Nexus - {} ({}/{})",
-                            active_tab.display_title(),
-                            tab_index + 1,
-                            tab_count
-                        );
-                        window.set_title(&title);
-                    }
-
+                    // Now borrow immutably for rendering
+                    let active_tab = tab_manager.active_tab();
                     match renderer.render(
                         &active_tab.buffer,
                         &active_tab.cursor,
                         &syntax_tokens,
                         active_tab.file_path.as_ref().and_then(|p| p.file_name()?.to_str()),
                         active_tab.is_modified,
+                        &file_tree,
+                        &tab_manager,
+                        &search_state,
                     ) {
                         Ok(_) => {}
                         Err(e) => {

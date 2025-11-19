@@ -128,6 +128,10 @@ impl TabManager {
         &self.tabs
     }
 
+    pub fn tabs_mut(&mut self) -> &mut Vec<Tab> {
+        &mut self.tabs
+    }
+
     pub fn active_index(&self) -> usize {
         self.active_index
     }
