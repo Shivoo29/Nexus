@@ -363,15 +363,6 @@ We welcome contributions! See [CONTRIBUTING.md](./CONTRIBUTING.md)
 
 ---
 
-## 🌟 Success Stories
-
-> "Nexus increased my coding speed by 40%. The AI actually understands my codebase." - **Sarah K., ML Engineer**
-
-> "Finally, I can pair program without leaving my editor. Discord integration is genius." - **Mike T., Senior Dev**
-
-> "GPU execution changed my workflow. Training models right in the editor is incredible." - **Alex R., Data Scientist**
-
----
 
 ## 🔐 Security & Privacy
 
