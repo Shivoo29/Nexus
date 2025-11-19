@@ -409,8 +409,42 @@ fn main() -> Result<()> {
                                             if node.is_dir {
                                                 log::info!("📁 Toggled: {}", node.name);
                                             } else {
-                                                log::info!("📄 Selected file: {}", node.path.display());
-                                                // TODO: Open file in new tab
+                                                // Open file in new tab
+                                                log::info!("📂 Opening file: {}", node.path.display());
+                                                match std::fs::read_to_string(&node.path) {
+                                                    Ok(content) => {
+                                                        // Create new tab with file content
+                                                        let tab = Tab::from_file(node.path.clone(), content);
+                                                        tab_manager.add_tab(tab);
+                                                        log::info!("✅ Opened: {}", node.name);
+
+                                                        // Detect file type and create syntax highlighter
+                                                        if let Some(ext) = node.path.extension() {
+                                                            if let Some(ext_str) = ext.to_str() {
+                                                                syntax_highlighter = SyntaxHighlighter::new(ext_str).ok();
+                                                                if syntax_highlighter.is_some() {
+                                                                    log::info!("🎨 Syntax highlighting: {}", ext_str);
+                                                                }
+                                                            }
+                                                        }
+
+                                                        // Highlight the new tab
+                                                        syntax_tokens = if let Some(ref mut highlighter) = syntax_highlighter {
+                                                            highlighter.highlight(&tab_manager.active_tab().buffer.text())
+                                                        } else {
+                                                            Vec::new()
+                                                        };
+
+                                                        // Update buffer version
+                                                        last_buffer_version = tab_manager.active_tab().buffer.version();
+
+                                                        // Optionally close file tree after opening
+                                                        // file_tree.toggle_visibility();
+                                                    }
+                                                    Err(e) => {
+                                                        log::error!("❌ Failed to read file: {}", e);
+                                                    }
+                                                }
                                             }
                                         }
                                         return;
